@@ -1,0 +1,170 @@
+---
+title: "510_FinalProject"
+output: html_notebook
+---
+
+```{r setup, results='hide'}
+library(limma)
+library(Glimma)
+library(edgeR)
+library(dplyr)
+library(magrittr)
+setwd('~/Desktop/USC/Fall_2020/TRGN_510/510_FinalProject')
+```
+
+## Reading in count and metadata
+```{r reading in count data}
+# Reading in count data
+count_matrix = read.table(file = 'count_processed.txt',sep = '\t',header = T,stringsAsFactors = F, check.names = F, row.names = 1)
+count_matrix = count_matrix[,order(names(count_matrix))]
+  
+
+#Reading in clinical metadata
+clinical_metadata = read.table(file = 'clinical_processed.txt', sep = '\t', header = T, as.is = T, check.names = F)
+clinical_metadata = clinical_metadata[!duplicated(clinical_metadata[ , c("case_submitter_id")]),]
+
+# Reading in exposure metadata
+exposure_metadata = read.csv(file = 'exposure_processed.txt', sep = '\t', header = T, as.is = T, check.names = F)
+
+
+# Merging metadata
+all_metadata = merge(x = clinical_metadata, y = exposure_metadata, by = 'case_submitter_id')
+
+all_metadata$ethnicity <- as.factor(all_metadata$ethnicity)
+all_metadata$gender <- as.factor(all_metadata$gender)
+all_metadata%<>%
+  mutate(cancer_stage=case_when(
+    ajcc_pathologic_stage %in% c("Stage IA","Stage IB") ~ c("Early Stage"),
+    ajcc_pathologic_stage %in% c("Stage IIIA") ~ c("Late Stage")
+  ))
+all_metadata$cancer_stage = as.factor(all_metadata$cancer_stage)
+all_metadata$race <- as.factor(all_metadata$race)
+rownames(all_metadata) <- all_metadata$case_submitter_id
+all_metadata = all_metadata[,-1]
+all_metadata = all_metadata[order(rownames(all_metadata)),]
+
+# Creating DGEList Object
+geneExpr = DGEList(counts = count_matrix, samples = all_metadata)
+geneExpr$samples$group=all_metadata$cancer_stage
+geneid = rownames(geneExpr)
+# Importing gencode reference from DGC website 
+gencode = read.table('gencode.gene.info.v22.tsv',sep = '\t',header = T,stringsAsFactors = F, check.names = F)
+genes = gencode[geneid %in% gencode$gene_id, ]
+genes = genes[,c("gene_id","gene_name","seqname")]
+rownames(genes) = genes$gene_id
+genes = genes[order(genes$gene_id),]
+geneExpr$genes = genes[,-1]
+```
+
+# Data pre-processing
+## Transformation from the raw-scale
+```{r}
+cpm <- cpm(geneExpr)
+lcpm <- cpm(geneExpr, log=TRUE)
+L <- mean(geneExpr$samples$lib.size) * 1e-6
+M <- median(geneExpr$samples$lib.size) * 1e-6
+c(L,M)
+```
+The average library size for this dataset is about 61.1 million.
+
+## Removing genes that are lowly expressed
+```{r}
+table(rowSums(geneExpr$counts==0)==75)
+keep.exprs <- filterByExpr(geneExpr, group=geneExpr$samples$group)
+```
+Around 11% of genes in the dataset have zero counts across all 75 samples.
+
+```{r}
+geneExpr <- geneExpr[keep.exprs,, keep.lib.sizes=FALSE]
+dim(geneExpr)
+```
+In this dataset, the median library size is 61.5 million and 10/61.5 is about 0.2, therefore the `filterByExpr` function keeps genes that have a CPM of 0.2 or more. With this cutoff the number of genes are reduced to 22200, about 36% of genes from what I started with. 
+```{r fig1, fig.height = 3, fig.width = 6, fig.align = "center",message=FALSE,warning=FALSE}
+lcpm.cutoff <- log2(10/M + 2/L)
+library(RColorBrewer)
+nsamples <- ncol(geneExpr)
+col <- brewer.pal(nsamples, "Paired")
+par(mfrow=c(1,2))
+plot(density(lcpm[,1]), col=col[1], lwd=2, ylim=c(0,0.55), las=2, main="", xlab="")
+title(main="A. Raw data", xlab="Log-cpm")
+abline(v=lcpm.cutoff, lty=3)
+for (i in 2:nsamples){
+den <- density(lcpm[,i])
+lines(den$x, den$y, col=col[i], lwd=2)
+}
+legend("topright", colnames(geneExpr$counts), text.col=col, bty="n")
+lcpm_filtered <- cpm(geneExpr, log=TRUE)
+plot(density(lcpm_filtered[,1]), col=col[1], lwd=2, ylim=c(0,0.26), las=2, main="", xlab="")
+title(main="B. Filtered data", xlab="Log-cpm")
+abline(v=lcpm.cutoff, lty=3)
+for (i in 2:nsamples){
+den <- density(lcpm_filtered[,i])
+lines(den$x, den$y, col=col[i], lwd=2)
+}
+legend("topright", colnames(geneExpr$counts), text.col=col, bty="n")
+```
+This graph showed that before filtering the data, a large portion of genes within each samples are lowly-expressed with log-CPM values that are small or negative.
+
+## Normalising gene expression distributions
+```{r Normalising gene expression distributions}
+geneExpr = calcNormFactors(geneExpr, method = "TMM")
+geneExpr$samples$norm.factors
+```
+
+
+```{r fig2, fig.height = 3, fig.width = 6, fig.align = "center"}
+geneExpr_unnormalized <- geneExpr
+geneExpr_unnormalized$samples$norm.factors <- 1
+par(mfrow=c(1,2))
+lcpm_unnormalized <- cpm(geneExpr_unnormalized, log=TRUE)
+boxplot(lcpm_unnormalized, las=2, col=col, main="")
+title(main="A. Example: Unnormalised data",ylab="Log-cpm")
+geneExpr_normalized <- calcNormFactors(geneExpr_unnormalized)  
+geneExpr_normalized$samples$norm.factors
+lcpm_normalized <- cpm(geneExpr_normalized, log=TRUE)
+boxplot(lcpm_normalized, las=2, col=col, main="")
+title(main="B. Example: Normalised data",ylab="Log-cpm")
+```
+This figure showed that after normalization the samples are more similar to each other. 
+
+## Unsupervised clustering of samples
+```{r fig3, fig.height = 3, fig.width = 6, fig.align = "center"}
+lcpm <- cpm(geneExpr, log=TRUE)
+par(mfrow=c(1,2))
+col.group <- geneExpr$samples$group
+levels(col.group) <-  brewer.pal(nlevels(col.group), "Set1")
+col.group <- as.character(col.group)
+col.race <- geneExpr$samples$race
+levels(col.race) <-  brewer.pal(nlevels(col.race), "Set2")
+col.race <- as.character(col.race)
+plotMDS(lcpm, labels=geneExpr$samples$group, col=col.group)
+title(main="A. Sample groups")
+plotMDS(lcpm, labels=geneExpr$samples$race, col=col.race, dim=c(3,4))
+title(main="B. Race")
+```
+In the MDS plot, there is no separation between group of patients with early stage lung cancer and late stage lung cancer. 
+
+# Differential expression analysis
+## Creating a design matrix and contrasts
+```{r}
+cancer_stage = geneExpr$samples$group
+ethnicity = geneExpr$samples$ethnicity
+gender = geneExpr$samples$gender
+race = geneExpr$samples$race
+age_at_diagnosis = geneExpr$samples$age_at_diagnosis
+smoking_hist = geneExpr$samples$cigarettes_per_day
+
+design = model.matrix(~0+cancer_stage+ethnicity+gender+race+age_at_diagnosis+smoking_hist)
+
+contr.matrix <- makeContrasts(
+   LateStagevsEarly = 'cancer_stageLate Stage'-'cancer_stageEarly Stage', 
+   levels = colnames(design))
+contr.matrix
+```
+
+
+
+
+
+
+
