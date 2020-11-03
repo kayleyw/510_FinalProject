@@ -14,5 +14,8 @@ Data for this analysis is publicly available dataset obtain from National Cancer
 ## Milestone 1
 Obtain RNA-Seq data from GDC Data Portal and reading them into RStudio. Pre-process the data according to the workflow from the vignette. 
 
+11/3 Progress:   
+The data has been downloaded from GDC portal. The raw count and metadata files were cleaned and formatted in Python before loading into R for analysis. DGEList-object has been produced and lowly expressed genes have been filtered. MDS plots and box plots were generated to visualized the effect of normalization. We agreed that adding a PCA plot may be a good idea.   
+
 ## Milestone 2
 Building Design Matrix and preform differential gene expression analysis, generate graphs and perform downstream pathway analysis with the differential expression analysis results. 
