@@ -163,7 +163,7 @@ plotMDS(lcpm, labels=geneExpr$samples$cigarettes_per_day, col=col.cigar_per_day,
 title(main="F. Cigarettes per day")
 
 ```
-In the MDS plot, there is no separation between group of patients with early stage lung cancer and late stage lung cancer. 
+In the MDS plot, there is some separation between group of patients diagnosed wiht Adenocarcinoma and Squamous cell carcinoma. You can also see male and female patients are segregating together. However, you cannot see any distinct clusters based on Age at diagnosis, Race, Ethncity and Cigarette per day. Therefore when we contruct the design matrix, we will take sex in to account and not the other variables. 
 
 # Differential expression analysis
 ## Creating a design matrix and contrasts
@@ -208,6 +208,7 @@ tfit <- treat(vfit, lfc=1)
 dt <- decideTests(tfit)
 summary(dt)
 ```
+After limiting the LFC threshold to 1, there are less DEGs and we can focus on genes that are most differentially expressed.  
 
 ## Useful graphical representations of differential expression results
 ### MD plot with Up & Down regulated DEGs 
@@ -222,7 +223,7 @@ glMDPlot(tfit, coef=1, status=dt, main=colnames(tfit)[1],
 
 
 ### Heatmap with top 100 genes 
-```{r fig7, fig.height = 11, fig.width = 6, fig.align = "center",include=FALSE}
+```{r fig7, fig.height = 11, fig.width = 6, fig.align = "center"}
 library(gplots)
 par(mar = rep(2, 4))
 Adenocarcinoma.vs.SquamousCell.topgenes <- res$gene_name[1:100]
@@ -233,6 +234,8 @@ heatmap.2(lcpm[i,], scale="row",
    col=mycol, trace="none", density.info="none", 
    margin=c(8,12), lhei=c(2,10), dendrogram="column")
 ```
+
+
 ### Gene set testing with camera
 ```{r, warning=FALSE,message=FALSE}
 library(Homo.sapiens)
