@@ -17,19 +17,13 @@ setwd('~/Desktop/USC/Fall_2020/TRGN_510/510_FinalProject/adenocarcinoma_vs_squam
 # Reading in count data
 count_matrix = read.table(file = 'count_processed.txt',sep = '\t',header = T,stringsAsFactors = F, check.names = F, row.names = 1)
 count_matrix = count_matrix[,order(names(count_matrix))]
-  
-
 #Reading in clinical metadata
 clinical_metadata = read.table(file = 'clinical_processed.txt', sep = '\t', header = T, as.is = T, check.names = F)
 clinical_metadata = clinical_metadata[!duplicated(clinical_metadata[ , c("case_submitter_id")]),]
-
 # Reading in exposure metadata
 exposure_metadata = read.csv(file = 'exposure_processed.txt', sep = '\t', header = T, as.is = T, check.names = F)
-
-
 # Merging metadata
 all_metadata = merge(x = clinical_metadata, y = exposure_metadata, by = 'case_submitter_id')
-
 all_metadata$ethnicity <- as.factor(all_metadata$ethnicity)
 all_metadata$gender <- as.factor(all_metadata$gender)
 all_metadata%<>%
@@ -42,12 +36,11 @@ all_metadata$race <- as.factor(all_metadata$race)
 rownames(all_metadata) <- all_metadata$case_submitter_id
 all_metadata = all_metadata[,-1]
 all_metadata = all_metadata[order(rownames(all_metadata)),]
-
 # Creating DGEList Object
 geneExpr = DGEList(counts = count_matrix, samples = all_metadata)
 geneExpr$samples$group=all_metadata$diagnosis
 geneid = rownames(geneExpr)
-# Importing gencode reference from DGC website 
+# Importing genecode reference to map annotation from DGC website 
 gencode = read.table('gencode.gene.info.v22.tsv',sep = '\t',header = T,stringsAsFactors = F, check.names = F)
 genes = gencode[geneid %in% gencode$gene_id, ]
 genes = genes[,c("gene_id","gene_name","seqname")]
@@ -65,21 +58,21 @@ L <- mean(geneExpr$samples$lib.size) * 1e-6
 M <- median(geneExpr$samples$lib.size) * 1e-6
 c(L,M)
 ```
-The average library size for this dataset is about 61.1 million.
+The average library size for this dataset is about 51.9 million.
 
 ## Removing genes that are lowly expressed
 ```{r}
-table(rowSums(geneExpr$counts==0)==75)
+table(rowSums(geneExpr$counts==0)==40)
 keep.exprs <- filterByExpr(geneExpr, group=geneExpr$samples$group)
 ```
-Around 11% of genes in the dataset have zero counts across all 75 samples.
+Around 11% of genes in the dataset have zero counts across all 40 samples.
 
 ```{r}
 geneExpr <- geneExpr[keep.exprs,, keep.lib.sizes=FALSE]
 dim(geneExpr)
 ```
-In this dataset, the median library size is 61.5 million and 10/61.5 is about 0.2, therefore the `filterByExpr` function keeps genes that have a CPM of 0.2 or more. With this cutoff the number of genes are reduced to 22200, about 36% of genes from what I started with. 
-```{r fig1, fig.height = 3, fig.width = 6, fig.align = "center",message=FALSE,warning=FALSE}
+In this dataset, the median library size is 48.8 million and 10/48.8 is about 0.2, therefore the `filterByExpr` function keeps genes that have a CPM of 0.2 or more. With this cutoff the number of genes are reduced to 21170, about 35% of genes from what I started with. 
+```{r fig1, fig.cap = "The density of log-CPM values for raw pre-filtered data (A) and post-filtered data (B) are shown for each sample" , fig.height = 3, fig.width = 6, fig.align = "center",message=FALSE,warning=FALSE}
 lcpm.cutoff <- log2(10/M + 2/L)
 library(RColorBrewer)
 nsamples <- ncol(geneExpr)
@@ -103,6 +96,7 @@ lines(den$x, den$y, col=col[i], lwd=2)
 }
 legend("topright", colnames(geneExpr$counts), text.col=col, bty="n")
 ```
+
 This graph showed that before filtering the data, a large portion of genes within each samples are lowly-expressed with log-CPM values that are small or negative.
 
 ## Normalising gene expression distributions
@@ -112,7 +106,7 @@ geneExpr$samples$norm.factors
 ```
 
 
-```{r fig2, fig.height = 4, fig.width = 6, fig.align = "center"}
+```{r fig2, fig.height = 5, fig.width = 6, fig.align = "center"}
 geneExpr_unnormalized <- geneExpr
 geneExpr_unnormalized$samples$norm.factors <- 1
 par(mfrow=c(1,2))
