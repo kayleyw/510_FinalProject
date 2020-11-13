@@ -25,4 +25,25 @@ I have selected a dataset of 40 patients, half of them are diagnosed with adenoc
 
 
 ## Milestone 2
-Building Design Matrix and preform differential gene expression analysis, generate graphs and perform downstream pathway analysis with the differential expression analysis results. 
+Building Design Matrix and preform differential gene expression analysis, generate graphs and perform downstream pathway analysis with the differential expression analysis results.
+
+11/13 Progress: 
+I have finished running camera gene set enrichment analysis after comparing transcriptiome profiling of lung adenocarcinoma vs lung squamous cell carcinoma in early stage. The results and description for each step are up-to-date in the `scripts/DE_Analysis_adenoVSsqu.nb.html` file. I will descript how did I obtain the data from GDC data protal and pre-process them in python script before loading them into R in the session below.    
+
+## Getting started
+### Step 1: Downloading data from GDC data portal    
+After selecting the data set I want to work with, I downloaded the manifest text file so that I can easily obtain all the file within that dataset. I used the `GDC RNASeq Tool` (https://github.com/cpreid2/gdc-rnaseq-tool) mentioned in the GDC data portal (https://gdc.cancer.gov/content/gdc-rnaseq-tool) to obtain a merged count matrix file. I also downloaded all the clinical metadata from the GDC data portal. Before using the tool, I downloaded a python script `gdc-rnaseq-tool.py` from the `GDC RNASeq Tool` github repository. Merged count matrix can be downloaded with the following command:    
+`$ python3 gdc-rnaseq-tool.py gdc_manifest_20201110_063233.txt`      
+The merged count matrix is in a folder `Merged_RNASeq_20201110-000008` as `Merged_Counts.tsv`    
+    
+### Step 2: Process count matrix and metadata files with python script     
+After downloading and unzipping all the metadata file and merged count data matrix, I pre-process the data by selecting variables in clinical metadata that I need for analysis and removing formating issues in the files in the pyhton script `MergedCount_processing_adeno.ipynb`.    
+    
+### Step 3: Downloading all other necessary files for analysis     
+For gene annotation mapping from ensembl to gene name, I downloaded `gencode.gene.info.v22.tsv` file from GDC data portal website (https://gdc.cancer.gov/about-data/gdc-data-processing/gdc-reference-files). I used this annotation file over the other availble package because it should be the most accurate one and mapped to the most genes. Besides the annotation file, I also downloaded `human_c2_v5p2.rdata` (http://bioinf.wehi.edu.au/software/MSigDB/), which is a C2 curated gene sets for camera gene set enrichment testing.      
+      
+### Step 4: Differential expression analysis   
+After these steps, differential expression analysis can be run on lung adenocarcinoma vs lung squamous cell carcinoma in early stage by R script `DE_Analysis_adenoVSsqu.Rmd`.    
+   
+
+   
