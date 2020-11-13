@@ -1,0 +1,287 @@
+---
+title: "510 FinalProject: RNA-Seq differential expression profiling of early-stage lung adenocarcinoma and squamous cell carcinoma"
+output: html_notebook
+---
+# Introduction
+This analysis is using the `RNA-seq analysis is easy as 1-2-3 with limma, Glimma and edgeR` vignette (http://129.217.206.11/packages/3.9/workflows/vignettes/RNAseq123/inst/doc/limmaWorkflow.html) to pre-process data and conduct differential gene expression analysis between Stage IA lung cancer patients with lung adenocarcinoma and lung squamous cell carcinoma. 
+
+This dataset of 40 lung cancer patients were downloaded from GDC data portal with `GDC RNASeq Tool` (https://github.com/cpreid2/gdc-rnaseq-tool) and then processed by `MergedCount_processing_adeno.ipynb` python script before loading in to R for analysis.
+
+# Set-up
+In this step, all necessary packages are loaded and working directory is set so that all the files can be loaded into the R Studio environment.
+```{r setup, results='hide'}
+library(limma)
+library(Glimma)
+library(edgeR)
+library(dplyr)
+library(magrittr)
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = "~/Desktop/USC/Fall_2020/TRGN_510/510_FinalProject")
+```
+
+# Data packaging
+## Reading in gene count and metadata
+The genecount, clinical metadata and exposure data are read in here. After reading in the clincial metadata and exposure data, they are merged together so that we only have to deal with one dataframe of metadata. Before merging, duplicated samples need to be removed so that we have one entry for each of the patients and the row number of the metadata can match the column number of the genecount data. The diagnosis variable in metadata is collapsed into only two categories: Adenocarcinoma and Squamous cell carcinoma, so that these two group can be compared against each other in differential gene expression analysis later on.       
+```{r reading in count data}
+# Reading in count data
+count_matrix = read.table(file = 'data/count_processed.txt',sep = '\t',header = T,stringsAsFactors = F, check.names = F, row.names = 1)
+count_matrix = count_matrix[,order(names(count_matrix))]
+#Reading in clinical metadata
+clinical_metadata = read.table(file = 'data/clinical_processed.txt', sep = '\t', header = T, as.is = T, check.names = F)
+clinical_metadata = clinical_metadata[!duplicated(clinical_metadata[ , c("case_submitter_id")]),]
+# Reading in exposure metadata
+exposure_metadata = read.csv(file = 'data/exposure_processed.txt', sep = '\t', header = T, as.is = T, check.names = F)
+# Merging metadata
+all_metadata = merge(x = clinical_metadata, y = exposure_metadata, by = 'case_submitter_id')
+all_metadata$ethnicity <- as.factor(all_metadata$ethnicity)
+all_metadata$gender <- as.factor(all_metadata$gender)
+all_metadata%<>%
+  mutate(diagnosis=case_when(
+    primary_diagnosis %in% c("Adenocarcinoma with mixed subtypes","Adenocarcinoma, NOS","Bronchiolo-alveolar adenocarcinoma, NOS","Papillary adenocarcinoma, NOS") ~ c("Adenocarcinoma"),
+    primary_diagnosis %in% c("Squamous cell carcinoma, large cell, nonkeratinizing, NOS","Squamous cell carcinoma, NOS") ~ c("Squamous_cell_carcinoma")
+  ))
+all_metadata$diagnosis = as.factor(all_metadata$diagnosis)
+all_metadata$race <- as.factor(all_metadata$race)
+rownames(all_metadata) <- all_metadata$case_submitter_id
+all_metadata = all_metadata[,-1]
+all_metadata = all_metadata[order(rownames(all_metadata)),]
+```
+
+## Creating DGEList Object and adding annotation for genes
+DGEList Object is created with genecount data and metadata from the previous step. By reading in the genecode reference file from GDC data portal, I am able to map ensembl IDs in the gene count data to their corresponding gene names. Gene name annotation will be availble to us in the analysis later on. It's easier to read gene names! 
+```{r}
+# Creating DGEList Object
+geneExpr = DGEList(counts = count_matrix, samples = all_metadata)
+geneExpr$samples$group=all_metadata$diagnosis
+geneid = rownames(geneExpr)
+# Importing genecode reference to map annotation from DGC website 
+gencode = read.table('data/gencode.gene.info.v22.tsv',sep = '\t',header = T,stringsAsFactors = F, check.names = F)
+genes = gencode[geneid %in% gencode$gene_id, ]
+genes = genes[,c("gene_id","gene_name","seqname")]
+rownames(genes) = genes$gene_id
+genes = genes[order(genes$gene_id),]
+geneExpr$genes = genes[,-1]
+```
+
+# Data pre-processing
+## Transformation from the raw-scale
+Because not all samples is seequenced with the same depth, we always like to know the average library size in differential expression analysis to compare all the samples equally. Here we estimated average library size by calculating CPM. 
+```{r}
+cpm <- cpm(geneExpr)
+lcpm <- cpm(geneExpr, log=TRUE)
+L <- mean(geneExpr$samples$lib.size) * 1e-6
+M <- median(geneExpr$samples$lib.size) * 1e-6
+c(L,M)
+```
+The average library size for this dataset is about 51.9 million.
+
+## Removing genes that are lowly expressed
+In RNA-sequencing data, it is very common to have genes that are not expressed. In order to investigate only genes that are differentially expressed between lung adenocarcinoma patients and lung squamous cell carcinoma patient, genes that are not expressed in all 40 samples are removed.
+```{r}
+table(rowSums(geneExpr$counts==0)==40)
+keep.exprs <- filterByExpr(geneExpr, group=geneExpr$samples$group)
+```
+Around 11% of genes in the dataset have zero counts across all 40 samples.
+
+```{r}
+geneExpr <- geneExpr[keep.exprs,, keep.lib.sizes=FALSE]
+dim(geneExpr)
+```
+In this dataset, the median library size is 48.8 million and 10/48.8 is about 0.2, therefore the `filterByExpr` function keeps genes that have a CPM of 0.2 or more. With this cutoff the number of genes are reduced to 21170, about 35% of genes from what I started with. 
+```{r fig1, fig.cap = "The density of log-CPM values for raw pre-filtered data (A) and post-filtered data (B) are shown for each sample" , fig.height = 3, fig.width = 6, fig.align = "center",message=FALSE,warning=FALSE}
+lcpm.cutoff <- log2(10/M + 2/L)
+library(RColorBrewer)
+nsamples <- ncol(geneExpr)
+col <- brewer.pal(nsamples, "Paired")
+par(mfrow=c(1,2))
+plot(density(lcpm[,1]), col=col[1], lwd=2, ylim=c(0,0.7), las=2, main="", xlab="")
+title(main="A. Raw data", xlab="Log-cpm")
+abline(v=lcpm.cutoff, lty=3)
+for (i in 2:nsamples){
+den <- density(lcpm[,i])
+lines(den$x, den$y, col=col[i], lwd=2)
+}
+legend("topright", colnames(geneExpr$counts), text.col=col, bty="n")
+lcpm_filtered <- cpm(geneExpr, log=TRUE)
+plot(density(lcpm_filtered[,1]), col=col[1], lwd=2, ylim=c(0,0.26), las=2, main="", xlab="")
+title(main="B. Filtered data", xlab="Log-cpm")
+abline(v=lcpm.cutoff, lty=3)
+for (i in 2:nsamples){
+den <- density(lcpm_filtered[,i])
+lines(den$x, den$y, col=col[i], lwd=2)
+}
+legend("topright", colnames(geneExpr$counts), text.col=col, bty="n")
+```
+
+This graph showed that before filtering the data, a large portion of genes within each samples are lowly-expressed with log-CPM values that are small or negative. After removing the lowly expressed genes (B), a large portion of genes in each sample pass the log-CPM threshold. 
+
+## Normalising gene expression distributions
+Normalizing genecount data can normalize the effects of non-biological external factors (e.g. sequencing batch, technicians etc.). So that the final differential expression results will probably be due to biological difference between groups. 
+```{r Normalising gene expression distributions}
+geneExpr = calcNormFactors(geneExpr, method = "TMM")
+geneExpr$samples$norm.factors
+```
+
+
+```{r fig2, fig.height = 5, fig.width = 6, fig.align = "center"}
+geneExpr_unnormalized <- geneExpr
+geneExpr_unnormalized$samples$norm.factors <- 1
+par(mfrow=c(1,2))
+lcpm_unnormalized <- cpm(geneExpr_unnormalized, log=TRUE)
+boxplot(lcpm_unnormalized, las=2, col=col, main="")
+title(main="A. Example: Unnormalised data",ylab="Log-cpm")
+geneExpr_normalized <- calcNormFactors(geneExpr_unnormalized)  
+geneExpr_normalized$samples$norm.factors
+lcpm_normalized <- cpm(geneExpr_normalized, log=TRUE)
+boxplot(lcpm_normalized, las=2, col=col, main="")
+title(main="B. Example: Normalised data",ylab="Log-cpm")
+```
+This figure showed that after normalization samples are more similar to each other in term of gene count. 
+
+## Unsupervised clustering of samples
+```{r fig3, fig.height = 3, fig.width = 6, fig.align = "center",message = FALSE, warning=FALSE}
+lcpm <- cpm(geneExpr, log=TRUE)
+par(mfrow=c(1,2))
+col.group <- geneExpr$samples$group
+levels(col.group) <-  brewer.pal(nlevels(col.group), "Set1")
+col.group <- as.character(col.group)
+
+col.race <- geneExpr$samples$race
+levels(col.race) <-  brewer.pal(nlevels(col.race), "Set2")
+col.race <- as.character(col.race)
+
+col.gender <- geneExpr$samples$gender
+levels(col.gender) <-  brewer.pal(nlevels(col.gender), "Set3")
+col.gender <- as.character(col.gender)
+
+col.age <- geneExpr$samples$age_at_diagnosis
+levels(col.age) <-  brewer.pal(nlevels(col.age), "Set1")
+col.age <- as.character(col.age)
+
+col.ethnicity <- geneExpr$samples$ethnicity
+levels(col.ethnicity) <-  brewer.pal(nlevels(col.ethnicity), "Set2")
+col.ethnicity <- as.character(col.ethnicity)
+
+col.cigar_per_day <- geneExpr$samples$cigarettes_per_day
+levels(col.cigar_per_day) <-  brewer.pal(nlevels(col.cigar_per_day), "Set3")
+col.cigar_per_day <- as.character(col.cigar_per_day)
+
+plotMDS(lcpm,labels=geneExpr$samples$group,  col=col.group)
+title(main="A. Sample groups")
+plotMDS(lcpm, labels=geneExpr$samples$gender, col=col.gender, dim=c(3,4))
+title(main="B. Sex")
+plotMDS(lcpm, labels=geneExpr$samples$age_at_diagnosis, col=col.age, dim=c(3,4))
+title(main="C. Age at diagnosis")
+plotMDS(lcpm, labels=geneExpr$samples$race, col=col.race, dim=c(3,4))
+title(main="D. Race")
+plotMDS(lcpm, labels=geneExpr$samples$ethnicity, col=col.ethnicity, dim=c(3,4))
+title(main="E. Ethnicity")
+plotMDS(lcpm, labels=geneExpr$samples$cigarettes_per_day, col=col.cigar_per_day, dim=c(3,4))
+title(main="F. Cigarettes per day")
+
+```
+In the MDS plot, there is some separation between patients diagnosed with Adenocarcinoma and Squamous cell carcinoma. You can also see male and female patients are segregating together. However, you cannot see any distinct clusters based on Age at diagnosis, Race, Ethnicity and Cigarette per day. Therefore when we construct the design matrix, we will take sex into account and not the other variables. 
+
+# Differential expression analysis
+## Creating a design matrix and contrasts
+Design matrix is created by including variables of interest (lung cancer diagnosis) and variable (sex) that can cause an effect based on the results from MDS plots above. A contrast matrix is setting up comparison between two conditions (Adenocarcinoma vs Squamous cell carcinoma, considering effects of sex).
+```{r}
+diagnosis = geneExpr$samples$group
+ethnicity = geneExpr$samples$ethnicity
+sex = geneExpr$samples$gender
+race = geneExpr$samples$race
+age_at_diagnosis = geneExpr$samples$age_at_diagnosis
+smoking_hist = geneExpr$samples$cigarettes_per_day
+
+design = model.matrix(~0+diagnosis+sex)
+colnames(design) <- gsub("diagnosis", "", colnames(design))
+contr.matrix <- makeContrasts(
+   AdenocarcinomavsSquamous_cell_carcinoma = Adenocarcinoma-Squamous_cell_carcinoma, 
+   levels = colnames(design))
+contr.matrix
+```
+
+## Removing heteroscedascity from count data
+Voom is performed and linear models are fitted for comparisons between lung adenocarcinoma and lung squamous cell carcinoma. Empirical Bayesian moderation is also performed to obtain more precise estimates of gene-wise comparisons. 
+```{r fig4, fig.height = 3, fig.width = 6, fig.align = "center", message=FALSE,warning=FALSE}
+par(mfrow=c(1,2))
+v <- voom(geneExpr, design, plot=TRUE)
+v
+vfit <- lmFit(v, design)
+vfit <- contrasts.fit(vfit, contrasts=contr.matrix)
+efit <- eBayes(vfit)
+plotSA(efit, main="Final model: Mean-variance trend")
+```
+
+## Examining the number of DE genes
+With an adjusted p-value cutoff of 5%, there are 2482 down-regualted genes and 1988 up-regulated differentially expressed gene between lung adenocarcinoma and squamous cell carcinoma patients in early stage. 
+```{r}
+summary(decideTests(efit))
+```
+```{r}
+res = topTable(efit,sort.by = "P",n=Inf)
+head(res)
+```
+## DEGs with LFC greater than 1
+```{r}
+tfit <- treat(vfit, lfc=1)
+dt <- decideTests(tfit)
+summary(dt)
+```
+After limiting the LFC threshold to 1, there are less DEGs and we can focus on genes that are the most differentially expressed.  
+
+## Useful graphical representations of differential expression results
+### MD plot with Up & Down regulated DEGs 
+The MD plot below show how many genes are differentially expressed and their direction with an adjusted p-value cutoff of 5% and LFC cutoff of 1. Each dot represents one gene. 
+```{r fig5, fig.height = 4, fig.width = 6, fig.align = "center"}
+plotMD(tfit, column=1, status=dt[,1], main=colnames(tfit)[1], 
+       xlim=c(-8,13))
+```
+```{r fig6, fig.height = 3, fig.width = 6, fig.align = "center"}
+glMDPlot(tfit, coef=1, status=dt, main=colnames(tfit)[1],
+         side.main="gene_name", counts=lcpm, groups=geneExpr$samples$group, launch=FALSE)
+```
+This generates an interactive MD plot, which provides information for each gene.    
+
+### Heatmap with top 100 genes   
+The following heatmap show the top 100 genes according to p-value. It also performed an unsupervised clustering of the samples. Based on the dendrogram, almost all samples from two different groups are separated except one squamous cell carcinoma sample found within the adenocarcinoma cluster on the left. This could be a potential outlier, some other tests (such as PCA) need to be performed to evaluate whether it need to be removed. From the heat map, you can see the expression pattern is consistence withino two groups, which is as expected because it is showing top 100 DEGs according to p-value.   
+```{r fig7, fig.height = 11, fig.width = 6, fig.align = "center", message=FALSE,warning=FALSE}
+library(gplots)
+par(mar = rep(2, 4))
+Adenocarcinoma.vs.SquamousCell.topgenes <- res$gene_name[1:100]
+i <- which(v$genes$gene_name %in% Adenocarcinoma.vs.SquamousCell.topgenes)
+mycol <- colorpanel(1000,"blue","white","red")
+heatmap.2(lcpm[i,], scale="row",
+   labRow=v$genes$gene_name[i], labCol=v$targets$group, 
+   col=mycol, trace="none", density.info="none", 
+   margin=c(8,12), lhei=c(2,10), dendrogram="column")
+```
+
+### Gene set testing with camera
+Before using gene set enrichment analysis, we need to map ENTREZ ID to gene name so that it is able to create an index from the c2 genes signature from the Broad Institute’s MSigDB c2 collection  (http://bioinf.wehi.edu.au/software/MSigDB/). Couple pathways have a significant p-value but all of them have a very high FDR. Since adenocarcinoma is starting in mucous producing cell in lung, I was hoping to see some mucous related pathways in the gene set enrichment analysis. The EGF response pathway was found to be downregulated in diverse tumor type according to GSEA, which is consistence with my results.
+```{r, warning=FALSE,message=FALSE}
+library(Homo.sapiens)
+geneid = v$genes$gene_name
+genes = select(Homo.sapiens, keys = geneid, columns = "ENTREZID", keytype = "SYMBOL")
+genes <- genes[!duplicated(genes$SYMBOL),]
+genes_v = v$genes
+genes_v$ensembl = rownames(genes_v)
+genes_v_new = merge(genes_v,genes,by.x="gene_name",by.y="SYMBOL",sort=F)
+rownames(genes_v_new) = genes_v_new$ensembl
+genes_v_new = genes_v_new[,-3]
+v$genes = genes_v_new
+
+load("data/human_c2_v5p2.rdata")
+idx <- ids2indices(Hs.c2,id=v$genes$ENTREZID)
+cam.AdenovsSqua <- camera(v,idx,design,contrast = contr.matrix[,1])
+head(cam.AdenovsSqua,20)
+
+```
+
+```{r fig8, fig.height = 3, fig.width = 6, fig.align = "center"}
+barcodeplot(efit$t[,1], index=idx$AMIT_EGF_RESPONSE_20_MCF10A, 
+            index2=idx$DORN_ADENOVIRUS_INFECTION_24HR_DN, main="Adenocarcinoma Vs Squamous Cell Carcinoma")
+```
+This graph is showing relative enrichment for Adenocarcinoma vs Squamous cell carcinoma in lung cancer. 
+
+
